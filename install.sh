@@ -1,85 +1,82 @@
 #!/bin/bash
 
-# --- 0. Настройка шрифтов для нормального русского в консоли ---
+# Устанавливаем шрифт в текущей сессии установщика
 setfont cyr-sun16
-echo "Поддержка русского языка в консоли активирована."
 
-# 1. Работа с дисками
+# 1. Работа с диском
 lsblk
 echo "------------------------------------------------------"
-read -p "Введите имя диска (например, sda): " DISK
-read -p "Размер EFI раздела в Мб (например, 512): " EFI_SIZE
+read -p "Выберите диск (например, sda): " DISK
+read -p "Мегабайты для EFI (например, 512): " EFI_SIZE
 
-# Разметка
 parted /dev/$DISK -- mklabel gpt
 parted /dev/$DISK -- mkpart ESP fat32 1MiB ${EFI_SIZE}MiB
 parted /dev/$DISK -- set 1 esp on
 parted /dev/$DISK -- mkpart primary ext4 ${EFI_SIZE}MiB 100%
 
-# Определение разделов
 [[ $DISK == nvme* ]] && P="p" || P=""
 PART_EFI="/dev/${DISK}${P}1"
 PART_ROOT="/dev/${DISK}${P}2"
 
-# Форматирование и монтаж
 mkfs.fat -F 32 $PART_EFI
 mkfs.ext4 $PART_ROOT
 mount $PART_ROOT /mnt
 mount --mkdir $PART_EFI /mnt/boot/efi
 
-# 2. Подготовка pacman.conf
+# 2. Pacman Multilib
 sed -i '/\[multilib\]/,/Include/s/^#//' /etc/pacman.conf
 
-# 3. Базовая установка (добавляем terminus-font для кириллицы)
+# 3. База (обязательно terminus-font)
 pacstrap /mnt base linux linux-firmware nano sudo terminus-font
 
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# 4. Выбор окружения
-echo "Выберите окружение:"
-echo "1) GNOME (Ubuntu-style)"
-echo "2) Hyprland (Tiling)"
-echo "3) KDE Plasma (Windows-style)"
+# 4. Выбор DE
+echo "1) GNOME | 2) Hyprland | 3) KDE"
 read -p "Выбор: " DE_CHOICE
-
 case $DE_CHOICE in
     1) DE_PKGS="gnome gnome-extra" ;;
     2) DE_PKGS="hyprland kitty waybar wofi mako swaybg xdg-desktop-portal-hyprland qt5-wayland qt6-wayland" ;;
     3) DE_PKGS="plasma-desktop sddm konsole dolphin" ;;
 esac
 
-# 5. Пользователь
+# 5. Юзер
 read -p "Имя пользователя: " USERNAME
 read -s -p "Пароль: " USERPASS
 echo ""
 
 # Входим в chroot
 arch-chroot /mnt /bin/bash <<EOF
-# Время и локаль
+# Часовой пояс
 ln -sf /usr/share/zoneinfo/Europe/Rome /etc/localtime
 hwclock --systohc
 
-# Генерируем нормальную русскую локаль
-sed -i 's/#ru_RU.UTF-8 UTF-8/ru_RU.UTF-8 UTF-8/' /etc/locale.gen
-sed -i 's/#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+# --- НАСТРОЙКА ЛОКАЛИ (Способ через прямую запись) ---
+echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
+echo "ru_RU.UTF-8 UTF-8" >> /etc/locale.gen
+
+# Генерируем локали
 locale-gen
 
+# Устанавливаем системный язык
 echo "LANG=ru_RU.UTF-8" > /etc/locale.conf
-# Настройка шрифта для консоли, чтобы не было латиницы/квадратов
+
+# Настраиваем шрифт для консоли (чтобы не было квадратов при загрузке)
 echo "KEYMAP=ru" > /etc/vconsole.conf
 echo "FONT=cyr-sun16" >> /etc/vconsole.conf
 
 echo "TPArch" > /etc/hostname
 
-# Пользователь
+# Юзер и права
 useradd -m -G wheel $USERNAME
 echo "$USERNAME:$USERPASS" | chpasswd
-sed -i 's/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+# Разрешаем wheel использовать sudo без пароля или с паролем (раскомментируем строку)
+echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/wheel
 
-# Multilib внутри системы
+# Повторяем multilib внутри
 sed -i '/\[multilib\]/,/Include/s/^#//' /etc/pacman.conf
 
-# Установка софта
+# Софт
 pacman -Sy --noconfirm grub efibootmgr networkmanager mesa lib32-mesa intel-media-driver intel-ucode pipewire pipewire-pulse pipewire-alsa wireplumber ttf-font-awesome ttf-dejavu noto-fonts-cjk $DE_PKGS
 
 # Загрузчик
@@ -89,8 +86,7 @@ grub-mkconfig -o /boot/grub/grub.cfg
 systemctl enable NetworkManager
 [[ "$DE_CHOICE" == "1" ]] && systemctl enable gdm
 [[ "$DE_CHOICE" == "3" ]] && systemctl enable sddm
-
 EOF
 
 umount -R /mnt
-echo "Готово! Теперь русский будет отображаться корректно."
+echo "Готово! Теперь локали сгенерированы правильно."
