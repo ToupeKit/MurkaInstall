@@ -1,49 +1,46 @@
 #!/bin/bash
 
+# --- 0. Настройка шрифтов для нормального русского в консоли ---
+setfont cyr-sun16
+echo "Поддержка русского языка в консоли активирована."
+
 # 1. Работа с дисками
 lsblk
 echo "------------------------------------------------------"
-read -p "Введите имя диска (например, sda или nvme0n1): " DISK
-read -p "Введите размер EFI раздела в Мб (например, 512): " EFI_SIZE
+read -p "Введите имя диска (например, sda): " DISK
+read -p "Размер EFI раздела в Мб (например, 512): " EFI_SIZE
 
-# Разметка (стираем всё!)
+# Разметка
 parted /dev/$DISK -- mklabel gpt
 parted /dev/$DISK -- mkpart ESP fat32 1MiB ${EFI_SIZE}MiB
 parted /dev/$DISK -- set 1 esp on
 parted /dev/$DISK -- mkpart primary ext4 ${EFI_SIZE}MiB 100%
 
-# Определяем имена разделов (учитываем nvme)
-if [[ $DISK == nvme* ]]; then
-    PART_EFI="/dev/${DISK}p1"
-    PART_ROOT="/dev/${DISK}p2"
-else
-    PART_EFI="/dev/${DISK}1"
-    PART_ROOT="/dev/${DISK}2"
-fi
+# Определение разделов
+[[ $DISK == nvme* ]] && P="p" || P=""
+PART_EFI="/dev/${DISK}${P}1"
+PART_ROOT="/dev/${DISK}${P}2"
 
-# Форматирование
+# Форматирование и монтаж
 mkfs.fat -F 32 $PART_EFI
 mkfs.ext4 $PART_ROOT
-
-# Монтирование
 mount $PART_ROOT /mnt
 mount --mkdir $PART_EFI /mnt/boot/efi
 
-# 2. Настройка pacman.conf (Multilib)
+# 2. Подготовка pacman.conf
 sed -i '/\[multilib\]/,/Include/s/^#//' /etc/pacman.conf
 
-# 3. Базовая установка
-pacstrap /mnt base linux linux-firmware nano sudo
+# 3. Базовая установка (добавляем terminus-font для кириллицы)
+pacstrap /mnt base linux linux-firmware nano sudo terminus-font
 
-# Генерация fstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
 # 4. Выбор окружения
 echo "Выберите окружение:"
-echo "1) GNOME (как Ubuntu)"
-echo "2) Hyprland (Тайлинг)"
-echo "3) KDE Plasma (как Windows)"
-read -p "Ваш выбор: " DE_CHOICE
+echo "1) GNOME (Ubuntu-style)"
+echo "2) Hyprland (Tiling)"
+echo "3) KDE Plasma (Windows-style)"
+read -p "Выбор: " DE_CHOICE
 
 case $DE_CHOICE in
     1) DE_PKGS="gnome gnome-extra" ;;
@@ -51,31 +48,35 @@ case $DE_CHOICE in
     3) DE_PKGS="plasma-desktop sddm konsole dolphin" ;;
 esac
 
-# 5. Создание пользователя
-read -p "Введите имя пользователя: " USERNAME
-read -s -p "Введите пароль пользователя: " USERPASS
+# 5. Пользователь
+read -p "Имя пользователя: " USERNAME
+read -s -p "Пароль: " USERPASS
 echo ""
 
-# Входим в chroot для финальной настройки
+# Входим в chroot
 arch-chroot /mnt /bin/bash <<EOF
-# Часовой пояс и время
+# Время и локаль
 ln -sf /usr/share/zoneinfo/Europe/Rome /etc/localtime
 hwclock --systohc
 
-# Локализация
-sed -i 's/#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+# Генерируем нормальную русскую локаль
 sed -i 's/#ru_RU.UTF-8 UTF-8/ru_RU.UTF-8 UTF-8/' /etc/locale.gen
+sed -i 's/#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
 locale-gen
+
 echo "LANG=ru_RU.UTF-8" > /etc/locale.conf
+# Настройка шрифта для консоли, чтобы не было латиницы/квадратов
+echo "KEYMAP=ru" > /etc/vconsole.conf
+echo "FONT=cyr-sun16" >> /etc/vconsole.conf
+
 echo "TPArch" > /etc/hostname
 
-# Пользователь и Sudo
-echo "root:root_password_here" | chpasswd # Рекомендую сменить
+# Пользователь
 useradd -m -G wheel $USERNAME
 echo "$USERNAME:$USERPASS" | chpasswd
 sed -i 's/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 
-# Репозитории внутри chroot
+# Multilib внутри системы
 sed -i '/\[multilib\]/,/Include/s/^#//' /etc/pacman.conf
 
 # Установка софта
@@ -85,14 +86,11 @@ pacman -Sy --noconfirm grub efibootmgr networkmanager mesa lib32-mesa intel-medi
 grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB --removable
 grub-mkconfig -o /boot/grub/grub.cfg
 
-# Сервисы
 systemctl enable NetworkManager
-if [ "$DE_CHOICE" = "3" ] || [ "$DE_CHOICE" = "1" ]; then
-    systemctl enable sddm || systemctl enable gdm
-fi
+[[ "$DE_CHOICE" == "1" ]] && systemctl enable gdm
+[[ "$DE_CHOICE" == "3" ]] && systemctl enable sddm
 
 EOF
 
-# Завершение
 umount -R /mnt
-echo "Установка завершена! Перезагрузитесь."
+echo "Готово! Теперь русский будет отображаться корректно."
